@@ -132,7 +132,7 @@ class ExperimentDataset(BedFile):
 
         return distance_to_3_prime
 
-    def makeDereplicatedData(self,window_size):
+    def makeDeduplicatedData(self,window_size):
         if 'annotated_data' not in self.__dir__():
             self.annotated_data = self.makeAnnotatedData(window_size)
         
