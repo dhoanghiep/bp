@@ -50,7 +50,7 @@ class BedFile():
             data = data.drop(3, axis = 1)
         elif file_extension == 'csv':
             data = pd.read_csv(file_path, sep= ',',header = None)
-        data.columns = ['chr','start','end','other','strand']
+        data.rename(columns = {0:'chr', 1:'start' ,2:'end'},inplace = True)
         self.data = data
 
     def getSequence(self,padding = 0, offset = 0, side = 'all_span', span = 0):
@@ -91,19 +91,23 @@ class BedFile():
                     stop = end + offset
                 extracted_sequence = getChromosomeSequence(chromosome)[begin:stop].upper()
                 sequences.append(reverseComplement(extracted_sequence))
-            
         return sequences
 
 
 class ExperimentDataset(BedFile):
     def __init__(self,dataset_path):
         super().__init__(dataset_path)
+        self.renameData()
+    
+    def renameData(self,new_column = ['chr','start','end','bp_position','strand','score']):
+        self.data.columns = new_column
 
     def makeAnnotatedData(self,window_size):
         data = pd.DataFrame()
-        data['chromosome'] =self.data['chr']
+        data['chromosome'] = self.data['chr']
         data['sequence'] = self.getSequence(side = '3_prime',span = window_size)
         data['annotation'] = self.getAnnotation(window_size)
+        data['score'] = self.data['score']
         return data
 
     def getAnnotation(self,window_size):
@@ -123,41 +127,47 @@ class ExperimentDataset(BedFile):
         strand = self.data['strand'][index]
         start = self.data['start'][index]
         end = self.data['end'][index]
-        bp = self.data['other'][index]
+        bp = self.data['bp_position'][index]
         
         if strand == '+':
             distance_to_3_prime = end - bp 
         elif strand == '-':
             distance_to_3_prime = bp - start + 1        
-
         return distance_to_3_prime
 
     def makeDeduplicatedData(self,window_size):
         if 'annotated_data' not in self.__dir__():
             self.annotated_data = self.makeAnnotatedData(window_size)
-        
         data = self.annotated_data
-        dereplicated_sequences = [''] # pseudo-sequence
-        merged_annotations = [[None]] # pseudo-annotation
+
+        deduplicated_sequences = ['pseudo-sequence'] # initialize with pseudo-sequence
+        merged_annotations = []
         chromosome = []
+        merged_scores = []
         for i in range(data.shape[0]):
-            main_sequence = dereplicated_sequences[-1]
+            main_sequence = deduplicated_sequences[-1]
             current_sequence = data['sequence'][i]
             current_annotation = data['annotation'][i]
             current_chromosome = data['chromosome'][i]
+            current_score = current_annotation*data['score'][i]
 
-            if current_sequence != main_sequence and len(current_annotation) != 1:
-                dereplicated_sequences.append(current_sequence)
-                merged_annotations.append(current_annotation)
-                chromosome.append(current_chromosome)
-            elif current_sequence == main_sequence and len(current_annotation) !=1:
-                merged_annotations[-1] = merged_annotations[-1] + current_annotation
+            sequence_is_annotated = (len(current_annotation) != 1)
+            if sequence_is_annotated:
+                if current_sequence != main_sequence:
+                    deduplicated_sequences.append(current_sequence)
+                    merged_annotations.append(current_annotation)
+                    chromosome.append(current_chromosome)
+                    merged_scores.append(current_score)
+                elif current_sequence == main_sequence:
+                    merged_annotations[-1] = np.logical_or(merged_annotations[-1],current_annotation).astype('f')
+                    merged_scores[-1] = np.maximum(merged_scores[-1],current_score)
             else:
                 continue
+        deduplicated_sequences = deduplicated_sequences[1:] # remove pseudo-sequence
 
-        dereplicated_sequences = dereplicated_sequences[1:] # remove pseudo-sequence
-        merged_annotations = merged_annotations[1:] # remove pseudo-annotation
-
-        return pd.DataFrame({'chromosome':chromosome,
-                             'sequence':dereplicated_sequences,
-                             'annotation':merged_annotations})
+        df = pd.DataFrame()
+        df['chromosome'] = chromosome
+        df['sequence'] = deduplicated_sequences
+        df['annotation'] = merged_annotations
+        df['score'] = merged_scores
+        return df
